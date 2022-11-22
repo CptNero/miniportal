@@ -3,6 +3,8 @@
 #define F_CPU 16000000
 
 #include <limits.h>
+#include <string.h>
+
 #include "avr_mcu_section.h"
 AVR_MCU(F_CPU, "atmega128");
 
@@ -25,8 +27,7 @@ AVR_MCU(F_CPU, "atmega128");
 
 #define	__AVR_ATMEGA128__	1
 
-unsigned char data, Line = 0;
-char Text[16], Ch;
+unsigned char data;
 unsigned int Bl = 1, LCD_State = 0, i, j;
 
 void Delay(unsigned long b)
@@ -101,15 +102,15 @@ void LCDSendChar(unsigned char a)
 }
 
 static unsigned char cgram[64] = {
-        // Wall symbol
-        0b00100,
-        0b00100,
-        0b00100,
-        0b00100,
-        0b00100,
-        0b00100,
-        0b00100,
-        0b00100,
+        // Pushed down pressure plate
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b01110,
+        0b01110,
+        0b01110,
+        0b11111,
 
         // Player symbol
         0b00110,
@@ -141,41 +142,45 @@ static unsigned char cgram[64] = {
         0b11111,
         0b11111,
 
+        // Horizontal wall symbol
         0b00000,
-        0b01000,
-        0b01000,
-        0b01110,
+        0b00000,
+        0b10001,
+        0b11111,
+        0b11111,
+        0b10001,
+        0b00000,
+        0b00000,
+
+        // Cross wall symbol
         0b00100,
         0b00100,
+        0b00100,
+        0b11111,
+        0b11111,
+        0b00100,
+        0b00100,
+        0b00100,
+
+        // Pressure plate
         0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b11111,
+        0b11111,
         0b11111,
 
+        // Companion cube
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
         0b00000,
         0b01110,
-        0b01000,
         0b01110,
-        0b00010,
         0b01110,
-        0b00000,
-        0b11111,
-
-        0b00000,
-        0b01110,
-        0b01000,
-        0b01110,
-        0b01010,
-        0b01110,
-        0b00000,
-        0b11111,
-
-        0b00000,
-        0b01110,
-        0b00010,
-        0b00010,
-        0b00010,
-        0b00010,
-        0b00000,
-        0b11111,
 };
 
 static void LCDInitCGRAM()
@@ -195,85 +200,31 @@ void LCDSendTxt(char* a)
   }
 }
 
-void LCDSendInt(long a)
-{
-	int C[20];
-	unsigned char Temp=0, NumLen = 0;
-	if (a < 0)
-	{
-		LCDSendChar('-');
-		a = -a;
-	}
-	do
-	{
-		Temp++;
-		C[Temp] = a % 10;
-		a = a/10;
-	}
-	while (a);
-	NumLen = Temp;
-	for (Temp = NumLen; Temp>0; Temp--) LCDSendChar(C[Temp] + 48);
-}
-
-void LCDSendInt_Old(int a)
-{
-  int h = 0;
-  int l = 0;
-
-  l = a%10;
-  h = a/10;
-
-  LCDSendChar(h+48);
-  LCDSendChar(l+48);
-}
-
-void SmartUp(void)
-{
-	int Temp;
-	for(Temp=0; Temp<1; Temp++) LCDSendCommand(CUR_UP);
-}
-
-void SmartDown(void)
-{
-	int Temp;
-	for(Temp=0; Temp<40; Temp++) LCDSendCommand(CUR_DOWN);
-}
-
-void Light(short a)
-{
-  if(a == 1)
-  {
-	PORTC = PORTC | 0b00100000;
-	DDRC = PORTC | 0b00100000;
-
-    //IO0SET_bit.P0_25 = 1;
-    //IO0DIR_bit.P0_25 = 1;
-  }
-  if(a == 0)
-  {
-    PORTC = PORTC & 0b11011111;
-    DDRC = DDRC & 0b11011111;
-
-    //IO0SET_bit.P0_25 = 0;
-    //IO0DIR_bit.P0_25 = 0;
-  }
-
-}
-
 /*****************************L C D**************************/
 
 /*************************Game Logic*********************/
 
-const static short numberOfLines = 2;
-const static short lineLength = 16;
-const static short mapSize = numberOfLines * lineLength;
+const static unsigned numberOfLines = 8;
+const static unsigned lineLength = 16;
+const static unsigned mapSize = numberOfLines * lineLength;
 
 // Floor tile
 const char F = INT_MAX - 1;
 // Pit tile
 const char E = INT_MAX;
-// Wall tile
-const char W = 0;
+// Vertical Wall tile
+const char VW = 'I';
+// Horizontal wall tile
+const char HW = 4;
+// Cross wall tile
+const char CW = 5;
+// Pressure plate
+const char PP = 6;
+// Portal cube
+const char PC = 7;
+// Checkmark
+const char PDP = 0;
+
 // Goal tile
 const char G = 3;
 
@@ -288,21 +239,24 @@ const char XP = 'O';
 
 int reRender = 1;
 int winCondition = 0;
+unsigned mapCounter = 0;
 
 int isPortalGunEnabled = 0;
+int isHoldingCube = 0;
 
 int portalGunDirectionX = 0;
 int portalGunDirectionY = 0;
 
 // 0 = the entrance portal will be place
 // 1 = the exit portal will be placed
-int portalState = 0;
+// 2 = both portals have been placed
+int portalGunState = 0;
 
 unsigned playerPosX = 0;
 unsigned playerPosY = 0;
 
 unsigned crosshairPosX = 0;
-unsigned crosshairPosy = 0;
+unsigned crosshairPosY = 0;
 
 unsigned entrancePortalPosX = -1;
 unsigned entrancePortalPosY = -1;
@@ -310,26 +264,95 @@ unsigned entrancePortalPosY = -1;
 unsigned exitPortalPosX = -1;
 unsigned exitPortalPosY = -1;
 
-char map[32] = {
-        P, F, E, F, W, F, E, F, W, F, E, F, W, F, E, F,
-        E, E, W, F, E, F, W, F, E, F, W, F, E, F, W, G,
-};
-
-char mapMemory[32] = {
-        F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
-        F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
-};
-
-void MoveToTile(unsigned pos, unsigned newPos, char newTile)
-{
-    map[pos] = mapMemory[pos];
-    mapMemory[newPos] = map[newPos];
-    map[newPos] = newTile;
-}
-
 unsigned Map2DCoordsTo1D(unsigned x, unsigned y)
 {
     return (y * lineLength) + x;
+}
+
+char map1[128] = {
+    E, E,  E, VW, F,  E,  E,  E,  E,  E,  E,  E,  E,  E,  F,  G,
+    E, P,  F, VW, F,  HW, HW, CW, HW, HW, HW, HW, HW, HW, HW, E,
+    E, E,  E, VW, F,  E,  F,  VW, F,  E,  F,  HW, HW, CW, HW, E,
+    E, F,  F, VW, E,  VW, F,  E,  F,  VW, F,  E,  F,  VW, F,  E,
+    E, HW, F, CW, HW, HW, HW, HW, HW, HW, HW, HW, HW, HW, HW, E,
+    E, E,  E, VW, F,  F,  E,  PC, E,  PP, F,  F,  F,  F,  F,  E,
+    E, E,  F, F,  F,  F,  E,  F,  E,  F,  F,  F,  F,  F,  F,  E,
+    E, E,  E, E,  E,  E,  E,  E,  E,  E,  E,  E,  E,  E,  E,  E,
+};
+
+char map2[128] = {
+    F,  F,  F,  F, F,  F, F,  F,  F,  F,  F,  F,  F,  F,  F,  F,
+    F,  F,  F,  F, F,  F, F,  CW, HW, HW, HW, HW, CW, F,  F,  F,
+    F,  PC, F,  F, F,  F, F,  VW, PP, F,  F,  PC, VW, F,  F,  F,
+    F,  F,  F,  F, F,  F, F,  VW, F,  P,  F,  F,  VW, F,  F,  F,
+    E,  E,  E,  E, E,  E, E,  CW, HW, HW, HW, HW, CW, HW, HW, HW,
+    F,  E,  F,  E, F,  E, VW, E,  E,  E,  E,  E,  E,  E,  E,  E,
+    F,  E,  F,  E, F,  E, VW, F,  PC, VW, PC, VW, F,  F,  F,  F,
+    PP, E,  PP, E, PP, E, VW, E,  E,  E,  E,  E,  E,  E,  E,  G,
+};
+
+char map[128];
+
+char mapMemory[128] = {
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+    F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F,
+};
+
+void RWX12Y4(char tile)
+{
+    map[Map2DCoordsTo1D(12, 4)] = tile;
+}
+
+void RWX12Y2(char tile)
+{
+    map[Map2DCoordsTo1D(12, 2)] = tile;
+}
+
+void RWX6Y6(char tile)
+{
+    map[Map2DCoordsTo1D(6, 6)] = tile;
+}
+
+void RWX9Y9(char tile)
+{
+    map[Map2DCoordsTo1D(9, 6)] = tile;
+}
+
+void RWX11Y6(char tile)
+{
+    map[Map2DCoordsTo1D(11, 6)] = tile;
+}
+
+// Events
+void (*eventPtrs[128])(char) = {
+        0,      0, 0,      0, 0,       0, 0, 0, 0,       0,       0, 0, 0, 0, 0, 0,
+        0,      0, 0,      0, 0,       0, 0, 0, 0,       0,       0, 0, 0, 0, 0, 0,
+        0,      0, 0,      0, 0,       0, 0, 0, RWX12Y2, 0,       0, 0, 0, 0, 0, 0,
+        0,      0, 0,      0, 0,       0, 0, 0, 0,       0,       0, 0, 0, 0, 0, 0,
+        0,      0, 0,      0, 0,       0, 0, 0, 0,       0,       0, 0, 0, 0, 0, 0,
+        0,      0, 0,      0, 0,       0, 0, 0, 0,       RWX12Y4, 0, 0, 0, 0, 0, 0,
+        0,      0, 0,      0, 0,       0, 0, 0, 0,       0,       0, 0, 0, 0, 0, 0,
+        RWX6Y6, 0, RWX9Y9, 0, RWX11Y6, 0, 0, 0, 0,       0,       0, 0, 0, 0, 0, 0,
+};
+
+void MoveToTile(unsigned pos, unsigned newPos, char newTile, int delay)
+{
+    map[pos] = mapMemory[pos];
+    mapMemory[newPos] = map[newPos];
+
+    if (delay) {
+        for (int i = 0; i < 24; i++) {
+            Delay(99999999);
+        }
+    }
+
+    map[newPos] = newTile;
 }
 
 int CheckBounds(unsigned newPlayerPosX, unsigned newPlayerPosY)
@@ -360,7 +383,7 @@ void UpdatePlayerPos(int xOffset, int yOffset)
     switch (tileToMoveTo) {
         case F:
         {
-            MoveToTile(playerPos, newPlayerPos, P);
+            MoveToTile(playerPos, newPlayerPos, P, 0);
 
             playerPosX = newPlayerPosX;
             playerPosY = newPlayerPosY;
@@ -369,8 +392,8 @@ void UpdatePlayerPos(int xOffset, int yOffset)
         case EP:
         {
             // Both portals haven't been placed
-            if (portalState != 2) {
-                MoveToTile(playerPos, newPlayerPos, P);
+            if (portalGunState != 2) {
+                MoveToTile(playerPos, newPlayerPos, P, 0);
 
                 playerPosX = newPlayerPosX;
                 playerPosY = newPlayerPosY;
@@ -382,14 +405,14 @@ void UpdatePlayerPos(int xOffset, int yOffset)
             playerPosX = exitPortalPosX;
             playerPosY = exitPortalPosY;
 
-            MoveToTile(playerPos, portalPos, P);
+            MoveToTile(playerPos, portalPos, P, 1);
             break;
         }
         case XP:
         {
             // Both portals haven't been placed
-            if (portalState != 2) {
-                MoveToTile(playerPos, newPlayerPos, P);
+            if (portalGunState != 2) {
+                MoveToTile(playerPos, newPlayerPos, P, 0);
 
                 playerPosX = newPlayerPosX;
                 playerPosY = newPlayerPosY;
@@ -401,8 +424,43 @@ void UpdatePlayerPos(int xOffset, int yOffset)
             playerPosX = entrancePortalPosX;
             playerPosY = entrancePortalPosY;
 
-            MoveToTile(playerPos, portalPos, P);
+            MoveToTile(playerPos, portalPos, P, 1);
             break;
+        }
+        case PC:
+        {
+            if (!isHoldingCube) {
+                isHoldingCube = 1;
+
+                map[playerPos] = F;
+                map[newPlayerPos] = P;
+
+                playerPosX = newPlayerPosX;
+                playerPosY = newPlayerPosY;
+            }
+
+            break;
+        }
+        case PP:
+        {
+            if (isHoldingCube) {
+                isHoldingCube = 0;
+                map[newPlayerPos] = PDP;
+
+                (*eventPtrs[newPlayerPos])(F);
+            }
+
+            break;
+        }
+        case PDP:
+        {
+            if (!isHoldingCube) {
+                isHoldingCube = 1;
+
+                map[newPlayerPos] = PP;
+
+                (*eventPtrs[newPlayerPos])(VW);
+            }
         }
         case E:
         {
@@ -428,13 +486,13 @@ void UpdateCrosshairPos(int xOffset, int yOffset)
     }
 
     unsigned newCrosshairPosX = crosshairPosX + xOffset;
-    unsigned newCrosshairPosY = crosshairPosy + yOffset;
+    unsigned newCrosshairPosY = crosshairPosY + yOffset;
 
     if (!CheckBounds(newCrosshairPosX, newCrosshairPosY)) {
         return;
     }
 
-    unsigned crosshairPos = Map2DCoordsTo1D(crosshairPosX, crosshairPosy);
+    unsigned crosshairPos = Map2DCoordsTo1D(crosshairPosX, crosshairPosY);
     unsigned newCrosshairPos = Map2DCoordsTo1D(newCrosshairPosX, newCrosshairPosY);
 
     char tileToMoveTo = map[newCrosshairPos];
@@ -444,14 +502,17 @@ void UpdateCrosshairPos(int xOffset, int yOffset)
         case E:
         case EP:
         case XP:
+        case PC:
         {
-            MoveToTile(crosshairPos, newCrosshairPos, C);
+            MoveToTile(crosshairPos, newCrosshairPos, C, 0);
 
             crosshairPosX = newCrosshairPosX;
-            crosshairPosy = newCrosshairPosY;
+            crosshairPosY = newCrosshairPosY;
             break;
         }
-        case W:
+        case VW:
+        case HW:
+        case CW:
         {
             break;
         }
@@ -463,7 +524,7 @@ void CleanupPortals()
     unsigned entrancePortalPos = Map2DCoordsTo1D(entrancePortalPosX, entrancePortalPosY);
     unsigned exitPortalPos = Map2DCoordsTo1D(exitPortalPosX, exitPortalPosY);
 
-    portalState = 0;
+    portalGunState = 0;
 
     entrancePortalPosX = -1;
     entrancePortalPosY = -1;
@@ -480,14 +541,30 @@ void CleanupPortals()
 
 void TogglePortalGun()
 {
-    // Make sure that a portal cannot be placed on another portal
-    if ((crosshairPosX == entrancePortalPosX && crosshairPosy == entrancePortalPosY) ||
-        (crosshairPosX == exitPortalPosX && crosshairPosy == exitPortalPosY)) {
-        return;
+    // Make sure that a portal cannot be placed on invalid objects
+    if (isPortalGunEnabled) {
+        if (crosshairPosX == playerPosX && crosshairPosY == playerPosY) {
+            return;
+        }
+
+        const char tileCrossHairAt = mapMemory[Map2DCoordsTo1D(crosshairPosX, crosshairPosY)];
+        switch (tileCrossHairAt) {
+            case E:
+            case P:
+            case EP:
+            case XP:
+            case PC:
+            case PP: {
+                return;
+            }
+            default: {
+                break;
+            }
+        }
     }
 
     // If the 2 portals has already been placed clean them up
-    if (portalState == 2) {
+    if (portalGunState == 2) {
         CleanupPortals();
 
         return;
@@ -503,36 +580,38 @@ void TogglePortalGun()
 
     unsigned playerPos = Map2DCoordsTo1D(playerPosX, playerPosY);
 
+    // Enable portal gun
     if (isPortalGunEnabled == 1) {
         // If the portal gun is enabled place the crosshair on the player
         crosshairPosX = playerPosX;
-        crosshairPosy = playerPosY;
+        crosshairPosY = playerPosY;
 
         map[playerPos] = C;
+    // Disable portal gun
     } else {
         // If the portal gun is disabled remove the crosshair
-        unsigned crossHairPos = Map2DCoordsTo1D(crosshairPosX, crosshairPosy);
+        unsigned crossHairPos = Map2DCoordsTo1D(crosshairPosX, crosshairPosY);
 
         map[playerPos] = P;
 
-        if (portalState == 0) {
-            portalState = 1;
+        if (portalGunState == 0) {
+            portalGunState = 1;
 
             entrancePortalPosX = crosshairPosX;
-            entrancePortalPosY = crosshairPosy;
+            entrancePortalPosY = crosshairPosY;
 
             crosshairPosX = 0;
-            crosshairPosy = 0;
+            crosshairPosY = 0;
 
             map[crossHairPos] = EP;
         } else {
-            portalState = 2;
+            portalGunState = 2;
 
             exitPortalPosX = crosshairPosX;
-            exitPortalPosY = crosshairPosy;
+            exitPortalPosY = crosshairPosY;
 
             crosshairPosX = 0;
-            crosshairPosy = 0;
+            crosshairPosY = 0;
 
             map[crossHairPos] = XP;
         }
@@ -552,27 +631,14 @@ void Port_Init()
 	PORTG = 0b00000000;		DDRG = 0b00000000;
 }
 
-int main()
+void ShowTitleScreen()
 {
-	Port_Init();
-	LCD_Init();
-    LCDInitCGRAM();
-	// NOTE: added missing initialization steps
-	LCDSendCommand(0x28); // function set: 4 bits interface, 2 display lines, 5x8 font
-	LCDSendCommand(DISP_OFF); // display off, cursor off, blinking off
-	LCDSendCommand(CLR_DISP); // clear display
-	LCDSendCommand(0x06); // entry mode set: cursor increments, display does not shift
-	LCDSendCommand(DISP_OFF);
-    LCDSendCommand(DISP_ON);
-    LCD_State = 1;
-
     int renderTitleScreen = 1;
+    int playerPosInLine = 0;
 
     char titleScreenArt[16] = {
             P, ' ', ' ', ' ', ' ', 'P', 'O', 'R', 'T', 'A', 'L', ' ', ' ', ' ', ' ', ' '
     };
-    int playerPosInLine = 0;
-
 
     LCDSendCommand(CLR_DISP);
     LCDSendCommand(DD_RAM_ADDR);
@@ -580,6 +646,7 @@ int main()
     LCDSendCommand(DD_RAM_ADDR2);
     LCDSendTxt(titleScreenArt);
     LCDSendCommand(DD_RAM_ADDR2);
+
     while (renderTitleScreen)
     {
         if (playerPosInLine == 16) {
@@ -621,15 +688,74 @@ int main()
             Bl = 1;		//if all buttons are released Bl gets value 1
         }
     }
+}
+
+void ResetGameState()
+{
+    crosshairPosX = 0;
+    crosshairPosY = 0;
+    entrancePortalPosX = -1;
+    entrancePortalPosY = -1;
+    exitPortalPosX = -1;
+    exitPortalPosY = -1;
+    portalGunState = 0;
+    portalGunDirectionX = 0;
+    portalGunDirectionY = 0;
+    winCondition = 0;
+    isPortalGunEnabled = 0;
+    isHoldingCube = 0;
+    reRender = 1;
+}
+
+void InitMap1()
+{
+    memcpy(map, map1, mapSize);
+    memset(mapMemory, F, mapSize);
+    playerPosX = 1;
+    playerPosY = 1;
+    ResetGameState();
+}
+
+void InitMap2()
+{
+    memcpy(map, map2, mapSize);
+    memset(mapMemory, F, mapSize);
+    playerPosX = 9;
+    playerPosY = 3;
+    ResetGameState();
+
+}
+
+const unsigned numberOfMaps = 2;
+void (*mapPtrs[2])() = {
+    InitMap2, InitMap1
+};
+
+int main()
+{
+	Port_Init();
+	LCD_Init();
+    LCDInitCGRAM();
+	// NOTE: added missing initialization steps
+	LCDSendCommand(0x28); // function set: 4 bits interface, 2 display lines, 5x8 font
+	LCDSendCommand(DISP_OFF); // display off, cursor off, blinking off
+	LCDSendCommand(CLR_DISP); // clear display
+	LCDSendCommand(0x06); // entry mode set: cursor increments, display does not shift
+	LCDSendCommand(DISP_OFF);
+    LCDSendCommand(DISP_ON);
+    LCD_State = 1;
+
+    ShowTitleScreen();
+
+    mapPtrs[mapCounter]();
 
 	while (1)
 	{
 		//Value of Bl prevents holding the buttons
 		//Bl = 0: One of the Buttons is pressed, release to press again
-		//LCD_State value is the state of LCD: 1 - LCD is ON; 0 - LCD is OFF
 
-		//Up Button (Button 1) : Turn ON Display
- 		if (!(PINA & 0b00000001) & Bl & LCD_State)	//check state of button 1 and value of Bl and LCD_State
+		//Up Button (Button 1) Move up
+ 		if (!(PINA & 0b00000001) & Bl)
 		{
             (isPortalGunEnabled == 0) ? UpdatePlayerPos(0, -1) : UpdateCrosshairPos(0, -1);
 
@@ -637,8 +763,8 @@ int main()
             Bl = 0;
 		}
 
-        //Down Button (Button 5) Turn OFF Display
-        if (!(PINA & 0b00010000) & Bl & LCD_State)	//check state of button 5 and value of Bl and LCD_State
+        //Down Button (Button 5) Move down
+        if (!(PINA & 0b00010000) & Bl)
         {
             (isPortalGunEnabled == 0) ? UpdatePlayerPos(0, 1) : UpdateCrosshairPos(0, 1);
 
@@ -646,8 +772,8 @@ int main()
             Bl = 0;
         }
 
-		//Left Button (Button 2) : Set Text1
-		if (!(PINA & 0b00000010) & Bl & LCD_State)		//check state of button 2 and value of Bl and LCD_State
+		//Left Button (Button 2) Move left
+		if (!(PINA & 0b00000010) & Bl)
 		{
             (isPortalGunEnabled == 0) ? UpdatePlayerPos(-1, 0) : UpdateCrosshairPos(-1, 0);
 
@@ -655,8 +781,8 @@ int main()
             Bl = 0;
 		}
 
-		//Right Button (Button 4) Set Text2
-		if (!(PINA & 0b00001000) & Bl & LCD_State)	//check state of button 4 and value of Bl and LCD_State
+		//Right Button (Button 4) Move right
+		if (!(PINA & 0b00001000) & Bl)
 		{
             (isPortalGunEnabled == 0) ? UpdatePlayerPos(1, 0) : UpdateCrosshairPos(1, 0);
 
@@ -664,8 +790,8 @@ int main()
             Bl = 0;
 		}
 
-        //Middle Button (Button 3) : Slide the text
-        if (!(PINA & 0b00000100) & Bl & LCD_State)
+        //Middle Button (Button 3) Enable/Disable portal gun
+        if (!(PINA & 0b00000100) & Bl)
         {
             TogglePortalGun();
             reRender = 1;
@@ -676,12 +802,31 @@ int main()
         {
             LCDSendCommand(CLR_DISP);
             LCDSendCommand(DD_RAM_ADDR);
-            Line = 1;
 
-            for (int idx = 0; idx < mapSize; idx++) {
-                if (idx == lineLength) {
+            unsigned viewPortOffset;
+            unsigned relativePosY = (isPortalGunEnabled) ? crosshairPosY : playerPosY;
+
+            switch (relativePosY) {
+                case 0: {
+                    viewPortOffset = 0;
+                    break;
+                }
+                case numberOfLines - 2: {
+                    viewPortOffset = relativePosY;
+                    break;
+                }
+                default: {
+                    viewPortOffset = relativePosY - 1;
+                    break;
+                }
+            }
+
+            unsigned renderAreaBegin = viewPortOffset * lineLength;
+            unsigned renderAreaEnd = renderAreaBegin + (lineLength * 2);
+
+            for (unsigned idx = renderAreaBegin; idx < renderAreaEnd; idx++) {
+                if (idx > renderAreaBegin && idx % lineLength == 0) {
                     LCDSendCommand(DD_RAM_ADDR2);
-                    Line = 2;
                 }
 
                 LCDSendChar(map[idx]);
@@ -695,10 +840,15 @@ int main()
             LCDSendCommand(DD_RAM_ADDR);
             LCDSendTxt("TheCakeWasALie");
             LCDSendCommand(DD_RAM_ADDR2);
-            LCDSendTxt("FuckYou:)-Glados");
-            for (int i = 0; i < 5000; i++);
+            LCDSendTxt("LoveYou:)-Glados");
 
-            return 0;
+            for (int k = 0; k < 24; k++) {
+                Delay(99999999);
+            }
+
+            mapCounter++;
+            mapCounter %= numberOfMaps;
+            mapPtrs[mapCounter]();
         }
 
 		//check state of all buttons
